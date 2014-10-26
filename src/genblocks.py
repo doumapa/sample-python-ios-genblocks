@@ -78,12 +78,12 @@ class GenBlocks(object):
   def analize(a, r):
     logging.debug('analize')
     blocks = []
-    return_type = ''
-    block_name = ''
-    block_prototype = ''
-    block_args = ''
     for i in a:
       argchk = 0
+      return_type = ''
+      block_name = ''
+      block_prototype = ''
+      block_args = ''
       for n, s in enumerate([d for d in r.split(i) if d != '' and d != '-']):
         if n == 0:
           return_type = s
@@ -101,7 +101,7 @@ class GenBlocks(object):
           else:
             if argchk == 0:
               block_prototype = block_prototype + s + ' '
-              argchk = 1;
+              argchk += 1;
             else:
               block_prototype = block_prototype + s + ', '
               block_args = block_args + s + ', '
@@ -111,10 +111,6 @@ class GenBlocks(object):
         'name': block_name,
         'prototype': block_prototype[:-2],
         'args': block_args[:-2]})
-      return_type = ''
-      block_name = ''
-      block_prototype = ''
-      block_args = ''
 
     return blocks
 
