@@ -9,6 +9,23 @@ import subprocess
 import sys
 import re
 
+private_interface_template = """
+#import <objc/runtime.h>
+
+@interface %s () <%s>
+@end
+"""
+
+class_factory_template = """\n#pragma mark - class factory
++ (instancetype)classFactory:(id)obj
+{
+  return ^ (%s *blocks) {
+    objc_setAssociatedObject(obj, &%sKey, blocks, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return blocks;
+  } ([%s new]);
+}
+"""
+
 setter_impl_template = """- (instancetype)set%sBlock:(%sBlock)block
 {
   objc_setAssociatedObject(self, &%sKey, block, OBJC_ASSOCIATION_COPY);
@@ -124,32 +141,51 @@ class GenBlocks(object):
     logging.debug('emit')
     print('// %s Block typedefs\n' % self.arg.protocol)
     for i in self.blocks:
+      print('#ifdef USE_%sBlock' % (i['name']))
       print('typedef %s (^%sBlock)(%s);' % (i['type'], i['name'], i['prototype']))
+      print('#endif')
 
     print('\n#pragma mark - %s Block setter definitions\n' % self.arg.protocol)
     for i in self.blocks:
+      print('#ifdef USE_%sBlock' % (i['name']))
       print('- (instancetype)set%sBlock:(%sBlock)block;' % (i['name'], i['name']))
+      print('#endif')
+
+    print(private_interface_template % (self.arg.classname, self.arg.protocol))
+
+    print('static char %sKey;\n' % self.arg.classname)
 
     print('\n// %s Block keys\n' % self.arg.protocol)
     for i in self.blocks:
+      print('#ifdef USE_%sBlock' % (i['name']))
       print('static char %sKey;' % i['name'])
+      print('#endif')
+
+    print(class_factory_template % (self.arg.classname, self.arg.classname, self.arg.classname))
 
     print('\n#pragma mark - %s Block setters\n' % self.arg.protocol)
     for i in self.blocks:
+      print('#ifdef USE_%sBlock' % (i['name']))
       print(setter_impl_template % (i['name'], i['name'], i['name']))
+      print('#endif')
 
     print('#pragma mark - %s\n' % self.arg.protocol)
     for n, i in enumerate(self.blocks):
       if i['type'] == 'void':
+        print('#ifdef USE_%sBlock' % (i['name']))
         print(protocol_impl_void_template % (self.methods[n], i['name'], i['args'], i['name']))
+        print('#endif')
       else:
+        print('#ifdef USE_%sBlock' % (i['name']))
         print(protocol_impl_type_template % (self.methods[n], i['name'], i['args'], self.default_type_value(i['type']), i['name']))
+        print('#endif')
 
 
 def main():
   import argparse
   def prepare_args(ap):
     ap.add_argument('protocol', help='Objective-C protocol name')
+    ap.add_argument('classname', help='Objective-C generate class name')
     ap.add_argument('-i', '--input', default='', help='Objective-C protocol header file')
     ap.add_argument('-o', '--output', default='', help='generating output file name')
     ap.add_argument('-d', '--folder', default='', help='output folder')
