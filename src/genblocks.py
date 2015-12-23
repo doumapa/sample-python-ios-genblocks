@@ -26,10 +26,9 @@ class_factory_template = """\n#pragma mark - class factory
 }
 """
 
-setter_impl_template = """- (instancetype)set%sBlock:(%sBlock)block
+setter_impl_template = """- (void)set%sBlock:(%sBlock)block
 {
   objc_setAssociatedObject(self, &%sKey, block, OBJC_ASSOCIATION_COPY);
-  return self;
 }
 """
 
@@ -148,7 +147,7 @@ class GenBlocks(object):
     print('\n#pragma mark - %s Block setter definitions\n' % self.arg.protocol)
     for i in self.blocks:
       print('#ifdef USE_%sBlock' % (i['name']))
-      print('- (instancetype)set%sBlock:(%sBlock)block;' % (i['name'], i['name']))
+      print('- (void)set%sBlock:(%sBlock)block;' % (i['name'], i['name']))
       print('#endif')
 
     print(private_interface_template % (self.arg.classname, self.arg.protocol))
