@@ -9,44 +9,66 @@ import subprocess
 import sys
 import re
 
-private_interface_template = """
+interface_header = """
+//
+// %s.h
+//
+"""
+
+interface_begin_template = """
+@interface %s"""
+
+interface_end_template = """
+@end"""
+
+property_impl_template = """@property (copy, nonatomic) %sBlock %s;"""
+
+implementation_header = """
+//
+// %s.m
+//
+"""
+
+private_interface_template = """#import "%s.h"
 #import <objc/runtime.h>
 
 @interface %s () <%s>
 @end
 """
 
-class_factory_template = """\n#pragma mark - class factory
+implementation_begin_template = """@implementation %s
+
+static char %sKey;\n"""
+
+implementation_end_template = """@end"""
+
+class_factory_template = """#pragma mark - class factory
+
 + (instancetype)classFactory:(id)obj
 {
-  return ^ (%s *blocks) {
+  return ^(%s *blocks) {
     objc_setAssociatedObject(obj, &%sKey, blocks, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return blocks;
   } ([%s new]);
 }
 """
 
-setter_impl_template = """- (void)set%sBlock:(%sBlock)block
+protocol_impl_void_template = """#ifdef USE_%sBlock
+%s
 {
-  objc_setAssociatedObject(self, &%sKey, block, OBJC_ASSOCIATION_COPY);
+  if (self.%sBlock) {
+    self.%sBlock(%s);
+  }
 }
+#endif
 """
 
-protocol_impl_void_template = """%s
+protocol_impl_type_template = """#ifdef USE_%sBlock
+%s
 {
-  ^(%sBlock block) {
-    if (block)
-      block(%s);
-  } (objc_getAssociatedObject(self, &%sKey));
+  return %sBlock ? %sBlock(%s) : %s;
 }
-"""
-
-protocol_impl_type_template = """%s
-{
-  return ^(%sBlock block) {
-    return (block) ? block(%s) : %s;
-  } (objc_getAssociatedObject(self, &%sKey));
-}
+#endif
 """
 
 class GenBlocks(object):
@@ -69,7 +91,7 @@ class GenBlocks(object):
     return (t in type_lookup) and type_lookup[t] or 'nil'
 
   @staticmethod
-  def ast(f, p):
+  def ast(f, p, r):
     logging.debug('ast')
     cmdline = [
       'clang',
@@ -80,11 +102,17 @@ class GenBlocks(object):
       '-fblocks',
       '-w',
       '-x',
-      'objective-c']
+      'objective-c',
+      '-isysroot',
+      r]
 
     token_filter = lambda d:(d != '') and not('Printing' in d) and not('@protocol' in d) and not('@end' in d)
 
-    proc = subprocess.Popen(cmdline, stdout=subprocess.PIPE, stdin=f, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(cmdline,
+                            stdout=subprocess.PIPE,
+                            stdin=f,
+                            stderr=subprocess.DEVNULL)
+
     a = [d[:-1] for d in [l.rstrip().decode() for l in proc.stdout if l] if token_filter(d)]
     (f != sys.stdin) and f.close()
     proc.wait()
@@ -95,12 +123,13 @@ class GenBlocks(object):
     logging.debug('analize')
     blocks = []
     for i in a:
-      argchk = 0
+      argstep = 0
       return_type = ''
       block_name = ''
       block_prototype = ''
       block_args = ''
       for n, s in enumerate([d for d in r.split(i) if d != '' and d != '-']):
+        logging.debug('argstep:%d token:%s' % (argstep, s))
         if n == 0:
           return_type = s
         elif n == 1:
@@ -111,13 +140,16 @@ class GenBlocks(object):
         else:
           if ':' in s:
             block_name = block_name + s[0].upper() + s[1:-1]
-            argchk = 0
+            argstep = 0
           elif s == '*':
             block_prototype = block_prototype + '*'
+          elif s == '__attribute__':
+            break
           else:
-            if argchk == 0:
+            if argstep == 0:
               block_prototype = block_prototype + s + ' '
-              argchk += 1;
+              if s != 'nonnull':
+                argstep += 1
             else:
               block_prototype = block_prototype + s + ', '
               block_args = block_args + s + ', '
@@ -132,62 +164,61 @@ class GenBlocks(object):
 
   def load(self):
     logging.debug('load')
-    self.methods = self.ast(self.arg.input and open(self.arg.input, 'r') or sys.stdin, self.arg.protocol)
+    self.methods = self.ast(self.arg.input and open(self.arg.input, 'r') or sys.stdin, self.arg.protocol, self.arg.sysroot)
     self.blocks = self.analize(self.methods, self.delimiters)
     return self
 
   def emit(self):
     logging.debug('emit')
-    print('// %s Block typedefs\n' % self.arg.protocol)
+
+    to_downcase_first_char = lambda s: s[:1].lower() + s[1:] if s else ''
+
+    print(interface_header % (self.arg.classname))
+
+    print('// %s Blocks typedefs\n' % (self.arg.protocol))
     for i in self.blocks:
       print('#ifdef USE_%sBlock' % (i['name']))
       print('typedef %s (^%sBlock)(%s);' % (i['type'], i['name'], i['prototype']))
       print('#endif')
 
-    print('\n#pragma mark - %s Block setter definitions\n' % self.arg.protocol)
+    print(interface_begin_template % (self.arg.classname))
+
+    print('\n#pragma mark - %s Blocks properties\n' % self.arg.protocol)
     for i in self.blocks:
       print('#ifdef USE_%sBlock' % (i['name']))
-      print('- (void)set%sBlock:(%sBlock)block;' % (i['name'], i['name']))
+      print(property_impl_template % (i['name'], to_downcase_first_char(i['name'])))
       print('#endif')
 
-    print(private_interface_template % (self.arg.classname, self.arg.protocol))
+    print(interface_end_template)
 
-    print('static char %sKey;\n' % self.arg.classname)
+    print(implementation_header % (self.arg.classname))
 
-    print('\n// %s Block keys\n' % self.arg.protocol)
-    for i in self.blocks:
-      print('#ifdef USE_%sBlock' % (i['name']))
-      print('static char %sKey;' % i['name'])
-      print('#endif')
+    print(private_interface_template % (self.arg.classname, self.arg.classname, self.arg.protocol))
+
+    print(implementation_begin_template % (self.arg.classname, self.arg.classname))
 
     print(class_factory_template % (self.arg.classname, self.arg.classname, self.arg.classname))
 
-    print('\n#pragma mark - %s Block setters\n' % self.arg.protocol)
-    for i in self.blocks:
-      print('#ifdef USE_%sBlock' % (i['name']))
-      print(setter_impl_template % (i['name'], i['name'], i['name']))
-      print('#endif')
-
     print('#pragma mark - %s\n' % self.arg.protocol)
     for n, i in enumerate(self.blocks):
+      logging.debug('arguments:%s' % i['args'])
+      dcname = to_downcase_first_char(i['name'])
       if i['type'] == 'void':
-        print('#ifdef USE_%sBlock' % (i['name']))
-        print(protocol_impl_void_template % (self.methods[n], i['name'], i['args'], i['name']))
-        print('#endif')
+        print(protocol_impl_void_template % (i['name'], self.methods[n], dcname, dcname, i['args']))
       else:
-        print('#ifdef USE_%sBlock' % (i['name']))
-        print(protocol_impl_type_template % (self.methods[n], i['name'], i['args'], self.default_type_value(i['type']), i['name']))
-        print('#endif')
+        print(protocol_impl_type_template % (i['name'], self.methods[n], dcname, dcname, i['args'], self.default_type_value(i['type'])))
 
+    print(implementation_end_template)
 
 def main():
   import argparse
   def prepare_args(ap):
+    ap.add_argument('sysroot', help='option for clang -isysroot')
     ap.add_argument('protocol', help='Objective-C protocol name')
     ap.add_argument('classname', help='Objective-C generate class name')
     ap.add_argument('-i', '--input', default='', help='Objective-C protocol header file')
-    ap.add_argument('-o', '--output', default='', help='generating output file name')
-    ap.add_argument('-d', '--folder', default='', help='output folder')
+    # ap.add_argument('-o', '--output', default='', help='generating output file name')
+    # ap.add_argument('-d', '--folder', default='', help='output folder')
     return ap
   args = prepare_args(argparse.ArgumentParser()).parse_args()
 
