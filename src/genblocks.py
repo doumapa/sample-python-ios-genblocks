@@ -3,7 +3,7 @@
 
 import logging
 logging.basicConfig(level=logging.DEBUG)
-logging.disable(logging.DEBUG)
+# logging.disable(logging.DEBUG)
 
 import subprocess
 import sys
@@ -16,12 +16,16 @@ interface_header = """
 """
 
 interface_begin_template = """
-@interface %s"""
+@interface %s : NSObject
+
+#pragma mark - class factory
+
++ (instancetype)classFactory:(id)obj;"""
 
 interface_end_template = """
 @end"""
 
-property_impl_template = """@property (copy, nonatomic) %sBlock %s;"""
+property_impl_template = """@property (copy, nonatomic) %sBlock %sBlock;"""
 
 implementation_header = """
 //
@@ -47,6 +51,8 @@ class_factory_template = """#pragma mark - class factory
 + (instancetype)classFactory:(id)obj
 {
   return ^(%s *blocks) {
+    //obl.delegate = blocks;
+    //obj.dataSource = blocks;
     objc_setAssociatedObject(obj, &%sKey, blocks, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return blocks;
   } ([%s new]);
@@ -66,7 +72,7 @@ protocol_impl_void_template = """#ifdef USE_%sBlock
 protocol_impl_type_template = """#ifdef USE_%sBlock
 %s
 {
-  return %sBlock ? %sBlock(%s) : %s;
+  return self.%sBlock ? self.%sBlock(%s) : %s;
 }
 #endif
 """
@@ -87,6 +93,9 @@ class GenBlocks(object):
       'CGFloat': '0',
       'NSString *': '@""',
       'NSString*': '@""',
+      'CGSize': 'CGSizeZero',
+      'UIEdgeInsets': 'UIEdgeInsetsZero',
+      'UITableViewCellEditingStyle': 'UITableViewCellEditingStyleNone',
       'id': 'nil'}
     return (t in type_lookup) and type_lookup[t] or 'nil'
 
@@ -129,14 +138,21 @@ class GenBlocks(object):
       block_prototype = ''
       block_args = ''
       for n, s in enumerate([d for d in r.split(i) if d != '' and d != '-']):
-        logging.debug('argstep:%d token:%s' % (argstep, s))
+        logging.debug('n:%d argstep:%d token:[%s]' % (n, argstep, s))
         if n == 0:
-          return_type = s
+          if s != 'nonnull' and s != 'nullable':
+            return_type = s
         elif n == 1:
           if s == '*':
             return_type = return_type + '*'
           else:
-            block_name = s[0].upper() + s[1:-1]
+            if s[0:2] != 'NS' and s[0:2] != 'UI' and s[0:2] != 'id':
+              block_name = s[0].upper() + s[1:-1]
+            else:
+              return_type = return_type + s
+        elif n == 2:
+          if s == '*':
+             return_type = return_type + '*'
         else:
           if ':' in s:
             block_name = block_name + s[0].upper() + s[1:-1]
@@ -147,12 +163,13 @@ class GenBlocks(object):
             break
           else:
             if argstep == 0:
-              block_prototype = block_prototype + s + ' '
-              if s != 'nonnull':
+              if s != 'nonnull' and s != 'nullable':
+                block_prototype = block_prototype + s + ' '
                 argstep += 1
             else:
               block_prototype = block_prototype + s + ', '
-              block_args = block_args + s + ', '
+              if s[0:2] != 'NS' and s[0:2] != 'UI':
+                block_args = block_args + s + ', '
 
       blocks.append({
         'type': return_type,
@@ -206,7 +223,8 @@ class GenBlocks(object):
       if i['type'] == 'void':
         print(protocol_impl_void_template % (i['name'], self.methods[n], dcname, dcname, i['args']))
       else:
-        print(protocol_impl_type_template % (i['name'], self.methods[n], dcname, dcname, i['args'], self.default_type_value(i['type'])))
+        logging.debug('type:[%s]' % i['type'])
+        print(protocol_impl_type_template % (i['name'], self.methods[n], dcname, dcname, i['args'], self.default_type_value(i['type'].strip())))
 
     print(implementation_end_template)
 
